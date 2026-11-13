@@ -258,49 +258,79 @@ function preparar(data) {
   }
   // redondeo a céntimos como ROUND() de Excel (mitades hacia fuera)
   const r2 = x => (Math.sign(x) * Math.round(Math.abs(x) * 100 + 1e-7) / 100) || 0;   // || 0 evita «-0,00 €»
-  for (const b of B) {
-    // Deuda a hoy, con el mismo criterio que el Excel (CLIENTES AD-AH con DEUDORES!J4 = hoy):
-    //  · una factura vence a los «días de pago» del cliente (CLIENTES _dias_vto; vacío = 60);
-    //  · los cobros hasta hoy pagan primero lo más antiguo (incluye las filas «regularización…»);
-    //  · los recibos domiciliados que aún no han vencido NO cuentan como cobrados: son deuda sin vencer.
-    let pag = 0;
+  // ---- deuda por barco, repartida entre sus dueños
+  // La deuda se calcula por BARCO, igual que el Excel (CLIENTES AC-AH). Si el barco tuvo varios dueños, los cobros
+  // pagan primero las ventas más antiguas (sean del dueño que sean) y la deuda que queda se reparte según de quién
+  // son las ventas pendientes. Así la suma de los dueños es siempre la deuda del barco.
+  const rep = new Map();
+  const ultMov = a => B[a].filas.reduce((x, k) => Math.max(x, m.d[k]), -1e9);
+  for (const [bi, as] of D.cuentasBarco) {
+    const ks = [];
+    for (const a of as) for (const k of B[a].filas) ks.push(k);
+    const ventas = ks.filter(k => m.t[k] === 0 || m.t[k] === 3).sort((x, y) => m.d[x] - m.d[y] || x - y);
+    let ven, sin, tot, lim = null, plazo = -1, pagB = 0;
     if (m.v) {
-      // Libro de Eurored (CLIENTES AC-AD): cada fila lleva su vencimiento.
-      //  · deuda total = todo lo facturado − todo lo cobrado (los recibos ya emitidos cuentan como cobrados);
-      //  · no vencida = lo pendiente de las filas que vencen después de hoy, sin pasar del total ni bajar de 0;
-      //  · vencida = total − no vencida.
-      let tot = 0, fut = 0;
-      for (const k of b.filas) {
-        const x = m.tot[k] - m.cob[k];
-        tot += x; if (m.v[k] > TODAY) fut += x;
-        if (m.cob[k] && m.d[k] <= TODAY) pag += m.cob[k];
-      }
-      tot = r2(tot); fut = r2(fut);
-      const nv = r2(Math.max(0, Math.min(tot, fut)));
-      b.plazo = -1; b.pagado = r2(pag);
-      b.total = tot; b.sinVencer = nv; b.vencida = r2(tot - nv); b.porVencer = 0;
+      // Libro de Eurored: cada fila lleva su vencimiento (CLIENTES AC-AD).
+      //  · total = facturado − cobrado (los recibos emitidos cuentan como cobrados);
+      //  · no vencida = lo pendiente de las filas que vencen después de hoy (entre 0 y el total); vencida = el resto.
+      let fut = 0; tot = 0;
+      for (const k of ks) { const x = m.tot[k] - m.cob[k]; tot += x; if (m.v[k] > TODAY) fut += x; if (m.cob[k] && m.d[k] <= TODAY) pagB += m.cob[k]; }
+      tot = r2(tot); sin = r2(Math.max(0, Math.min(tot, r2(fut)))); ven = r2(tot - sin);
+      pagB = r2(ks.reduce((u, k) => u + (m.t[k] === 0 || m.t[k] === 3 ? m.tot[k] : 0), 0) - tot);   // lo ya pagado, para el FIFO
     } else {
-    const p = (D.dvto || [])[b.bi], plazo = p == null ? 60 : p, lim = TODAY - plazo;
-    let sv = 0, sn = 0;
-    for (const k of b.filas) {
-      const t = m.t[k], d = m.d[k];
-      if (t === 0 || t === 3) { if (d <= lim) sv += m.tot[k]; else sn += m.tot[k]; }
-      if (m.cob[k] && d <= TODAY) pag += m.cob[k];
+      // Libro de Chesky (CLIENTES AD-AH con DEUDORES!J4 = hoy): una venta vence a los «días de pago» del cliente
+      // (vacío = 60); los cobros hasta hoy pagan primero lo más antiguo (incluye las «regularización…»); los recibos
+      // domiciliados que aún no han vencido NO cuentan como cobrados: son deuda sin vencer.
+      const p = (D.dvto || [])[bi]; plazo = p == null ? 60 : p; lim = TODAY - plazo;
+      let sv = 0, sn = 0;
+      for (const k of ks) {
+        const t = m.t[k], d = m.d[k];
+        if (t === 0 || t === 3) { if (d <= lim) sv += m.tot[k]; else sn += m.tot[k]; }
+        if (m.cob[k] && d <= TODAY) pagB += m.cob[k];
+      }
+      sv = r2(sv); sn = r2(sn); pagB = r2(pagB);   // igual que CLIENTES AD, AE y AF
+      ven = r2(sv - pagB >= 0 ? sv - pagB : Math.min(0, sv + sn - pagB)); tot = r2(sv + sn - pagB); sin = r2(tot - ven);
     }
-    sv = r2(sv); sn = r2(sn); pag = r2(pag);   // igual que CLIENTES AD, AE y AF
-    const ven = r2(sv - pag >= 0 ? sv - pag : Math.min(0, sv + sn - pag));
-    b.plazo = plazo; b.pagado = pag;
-    b.vencida = r2(ven); b.sinVencer = r2(sv + sn - pag - ven); b.total = r2(sv + sn - pag);
-    b.porVencer = r2(b.filas.reduce((s, k) => s + (m.t[k] === 2 && m.d[k] > TODAY ? m.cob[k] : 0), 0));
+    // FIFO del barco: qué ventas quedan sin pagar y de qué dueño son
+    let resto = pagB; const fv = new Map(), fs = new Map(), desde = new Map();
+    for (const k of ventas) {
+      const x = m.tot[k];
+      if (x < 0) { resto -= x; continue; }   // un abono funciona como un pago
+      const pay = Math.min(Math.max(resto, 0), x); resto -= pay; const out = x - pay, a = m.a[k];
+      if (out > 0.005) {
+        const vencida = m.v ? m.v[k] <= TODAY : m.d[k] <= lim;
+        const mp = vencida ? fv : fs; mp.set(a, (mp.get(a) || 0) + out);
+        if (!desde.has(a)) desde.set(a, m.d[k]);
+      }
     }
+    const ultima = as.slice().sort((x, y) => ultMov(y) - ultMov(x))[0];
+    const reparte = (total, mp) => {
+      const out = new Map();
+      if (as.length === 1) { out.set(as[0], total); return out; }
+      const sum = [...mp.values()].reduce((u, v) => u + v, 0);
+      if (Math.abs(total) < 0.005) return out;
+      if (sum < 0.005 || total < 0) { out.set(ultima, total); return out; }   // saldo a favor: al dueño actual
+      const ord = as.filter(a => mp.get(a) > 0.005); let acum = 0;
+      ord.forEach((a, i) => { const v = i === ord.length - 1 ? r2(total - acum) : r2(total * mp.get(a) / sum); acum = r2(acum + v); out.set(a, v); });
+      return out;
+    };
+    const rv = reparte(ven, fv), rs = reparte(sin, fs);
+    for (const a of as) rep.set(a, { ven: rv.get(a) || 0, sin: rs.get(a) || 0, plazo, desde: desde.get(a), solo: as.length === 1 });
+  }
+  for (const b of B) {
+    const r = rep.get(b.i);
+    let pag = 0;
+    for (const k of b.filas) if (m.cob[k] && m.d[k] <= TODAY) pag += m.cob[k];
+    b.plazo = r.plazo; b.pagado = r2(pag);
+    b.vencida = r2(r.ven); b.sinVencer = r2(r.sin); b.total = r2(r.ven + r.sin);
+    b.porVencer = m.v ? 0 : r2(b.filas.reduce((s, k) => s + (m.t[k] === 2 && m.d[k] > TODAY ? m.cob[k] : 0), 0));
     b.saldo = b.total;   // deuda total = vencida + sin vencer
     b.estado = 0; b.dias = null;
     if (b.saldo > 0.5) {
-      // antigüedad: la venta más antigua que queda sin cubrir (los cobros pagan primero lo más viejo)
-      const ventas = b.filas.filter(k => m.t[k] === 0 || m.t[k] === 3).sort((x, y) => m.d[x] - m.d[y]);
-      let resto = pag, desde = null;
-      for (const k of ventas) { resto -= m.tot[k]; if (resto < -0.5) { desde = m.d[k]; break; } }
-      if (desde == null && ventas.length) desde = m.d[ventas[ventas.length - 1]];
+      // antigüedad: la venta más antigua que queda sin cubrir (los cobros del barco pagan primero lo más viejo)
+      const ventas = b.filas.filter(k => m.t[k] === 0 || m.t[k] === 3);
+      let desde = r.desde;
+      if (desde == null && ventas.length) desde = ventas.reduce((x, k) => Math.max(x, m.d[k]), -1e9);
       b.dias = desde == null ? 0 : Math.max(0, TODAY - desde);
       b.estado = b.dias <= 90 ? 1 : b.dias <= 365 ? 2 : 3;
     }
