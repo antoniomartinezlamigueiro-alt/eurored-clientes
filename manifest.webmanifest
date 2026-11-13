@@ -1,6 +1,6 @@
 {
-  "name": "Eurored Coruña · Clientes",
-  "short_name": "Eurored",
+  "name": "Deuda ER",
+  "short_name": "Deuda ER",
   "description": "Deudas, entregas y ventas de los clientes de Eurored Coruña",
   "start_url": "./",
   "scope": "./",
