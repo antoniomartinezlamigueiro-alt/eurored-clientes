@@ -426,7 +426,7 @@ const VISTAS = {
       <div class="kpi"><div class="l">Ventas ${y}</div><div class="v num">${eur0(v)}</div><div class="s">${dv == null ? "" : `<span class="${dv >= 0 ? "up" : "down"}">${dv >= 0 ? "▲" : "▼"} ${Math.abs(dv)} %</span> ${cmp}`}</div></div>
       <div class="kpi"><div class="l">Cobrado ${y}</div><div class="v num">${eur0(c)}</div><div class="s">${dc == null ? "" : `<span class="${dc >= 0 ? "up" : "down"}">${dc >= 0 ? "▲" : "▼"} ${Math.abs(dc)} %</span> ${cmp}`}</div></div>
       <div class="kpi"><div class="l">Comisión ${y}</div><div class="v num">${eur0(com)}</div><div class="s">3 % / 1,5 % por línea</div></div>
-      <div class="kpi"><div class="l">Facturas ${y}</div><div class="v num">${NF0.format(new Set(D.mov.f.filter((f, k) => f && yearOf(D.mov.d[k]) === y && D.mov.t[k] === 0)).size)}</div><div class="s">${top.size} barcos con compras</div></div>
+      <div class="kpi"><div class="l">Facturas ${y}</div><div class="v num">${NF0.format(new Set(D.mov.f.filter((f, k) => f && yearOf(D.mov.d[k]) === y && (D.mov.t[k] === 0 || D.mov.t[k] === 3))).size)}</div><div class="s">${top.size} barcos con compras</div></div>
     </div>
     <div class="card"><h2>Ventas y cobros por mes · ${y}</h2>${barras([porMes, porMesC], MESES, ["var(--ventas)", "var(--cobros)"])}
       <div class="legend"><span><b style="background:var(--ventas)"></b>Ventas</span><span><b style="background:var(--cobros)"></b>Cobrado</span></div></div>
