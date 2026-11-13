@@ -114,6 +114,11 @@ nav.tabs button.on{color:var(--azul)}
 .ln{display:flex;justify-content:space-between;gap:10px;font-size:14px;padding:2px 0}
 .ln .c{flex:1;min-width:0}
 .ln .q{color:var(--sub);font-size:12.5px}
+.sel2{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px}
+.sel2 label{font-size:11.5px;color:#C9DAEC;display:block}
+.sel2 select{width:100%;margin-top:3px;padding:9px 8px;border-radius:10px;border:0;background:rgba(255,255,255,.16);color:#fff;font-weight:650;font-size:14px;-webkit-appearance:none;appearance:none}
+.sel2 select option{color:#000}
+.desg .row{padding:9px 0}
 .seg{display:flex;background:var(--chip);border-radius:12px;padding:3px;margin-bottom:10px}
 .seg button{flex:1;padding:8px;border-radius:9px;font-size:13.5px;font-weight:650;color:var(--sub)}
 .seg button.on{background:var(--card);color:var(--txt);box-shadow:0 1px 2px rgba(0,0,0,.08)}
@@ -121,6 +126,20 @@ svg.chart text{fill:var(--sub);font-size:10px}
 .toast{position:fixed;left:50%;bottom:calc(90px + var(--safe-b));transform:translateX(-50%);background:var(--navy);color:#fff;padding:10px 16px;border-radius:12px;font-size:14px;z-index:60;opacity:0;transition:opacity .2s;pointer-events:none;max-width:90%}
 .toast.on{opacity:1}
 .hidden{display:none!important}
+/* deuda vencida / sin vencer / total */
+.trio{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.trio .x{background:var(--chip);border-radius:12px;padding:9px 10px;text-align:left}
+.trio .x .l{font-size:11.5px;color:var(--sub)}
+.trio .x .v{font-size:16px;font-weight:750;margin-top:1px;letter-spacing:-.3px;white-space:nowrap}
+.trio.f .x .v{font-size:clamp(12.5px,3.9vw,16px)}
+.trio .x.cero .v{color:var(--sub)!important}
+.trio .x.ven .v{color:var(--rojo)}.trio .x.sv .v{color:var(--azul)}
+@media (prefers-color-scheme:dark){.trio .x.sv .v{color:#6FB0F0}}
+.kpi.big .trio .x{background:rgba(255,255,255,.12)}.kpi.big .trio .x .l{color:#BBD0E6}
+.kpi.big .trio .x .v{color:#fff}.kpi.big .trio .x.ven .v{color:#FFB3B3}
+.vs{font-size:11.5px;color:var(--sub);margin-top:1px;white-space:nowrap}
+.vs .ven{color:var(--rojo);font-weight:650}
+.nota{font-size:12px;color:var(--sub);margin:6px 2px 0}
 </style>
 </head>
 <body>
@@ -201,17 +220,33 @@ const store = {
 };
 
 // ======================================================== modelo
-let D, B, S = { vista: "resumen", anio: null, dFiltro: 0, dOrden: "importe", dq: "", bq: "", bOrden: "ventas", pAnio: null, pq: "", lim: {} };
+let D, B, S = { vista: "resumen", anio: null, dFiltro: 0, dVen: 0, dOrden: "importe", dq: "", bq: "", bOrden: "ventas", pAnio: null, pq: "", lim: {} };
 function preparar(data) {
   D = data;
   const m = D.mov, n = m.d.length, nb = D.barcos.length;
   // las regularizaciones del cuadre cuentan para la deuda, pero no son cobros reales
   D.ajuste = new Set(D.conceptos.map((c, i) => /^regulariz/i.test(c) ? i : -1).filter(i => i >= 0));
   D.esCobro = k => m.cob[k] && !D.ajuste.has(m.c[k]);
-  B = D.barcos.map((b, i) => ({ i, nombre: b[0], titular: b[1], puerto: b[2], prov: b[3], tel: (D.tels || [])[i] || "",
-    ventas: 0, cobrado: 0, com: 0, uVenta: null, uCobro: null, primera: null, filas: [], porAnio: {} }));
+  // Cada «cuenta» es un barco con un cliente (como la FICHA del Excel): si un barco cambió de dueño,
+  // las compras y los cobros de cada dueño van por separado y no se mezclan las deudas.
+  const cl = m.cl || null, idx = new Map();
+  B = []; m.a = new Int32Array(n);
+  D.cuentasCli = new Map(); D.cuentasBarco = new Map();
   for (let k = 0; k < n; k++) {
-    const b = B[m.b[k]], t = m.t[k], d = m.d[k];
+    const bi = m.b[k], ci = cl ? cl[k] : -1, key = bi + "|" + ci;
+    let a = idx.get(key);
+    if (a == null) {
+      a = B.length; idx.set(key, a);
+      const x = D.barcos[bi];
+      B.push({ i: a, bi, ci, nombre: x[0], titular: ci >= 0 ? D.clientes[ci] : x[1], puerto: x[2], prov: x[3], tel: (D.tels || [])[bi] || "",
+        ventas: 0, cobrado: 0, com: 0, uVenta: null, uCobro: null, primera: null, filas: [], porAnio: {} });
+      if (!D.cuentasCli.has(ci)) D.cuentasCli.set(ci, []); D.cuentasCli.get(ci).push(a);
+      if (!D.cuentasBarco.has(bi)) D.cuentasBarco.set(bi, []); D.cuentasBarco.get(bi).push(a);
+    }
+    m.a[k] = a;
+  }
+  for (let k = 0; k < n; k++) {
+    const b = B[m.a[k]], t = m.t[k], d = m.d[k];
     b.filas.push(k);
     if (t === 0 || t === 3) {
       b.ventas += m.tot[k]; b.com += m.com[k];
@@ -221,13 +256,49 @@ function preparar(data) {
     if (m.cob[k]) { b.cobrado += m.cob[k]; if (D.esCobro(k) && d <= TODAY && (b.uCobro == null || d > b.uCobro)) b.uCobro = d; }
     if (b.primera == null || d < b.primera) b.primera = d;
   }
+  // redondeo a céntimos como ROUND() de Excel (mitades hacia fuera)
+  const r2 = x => (Math.sign(x) * Math.round(Math.abs(x) * 100 + 1e-7) / 100) || 0;   // || 0 evita «-0,00 €»
   for (const b of B) {
-    b.saldo = Math.round((b.ventas - b.cobrado) * 100) / 100;
+    // Deuda a hoy, con el mismo criterio que el Excel (CLIENTES AD-AH con DEUDORES!J4 = hoy):
+    //  · una factura vence a los «días de pago» del cliente (CLIENTES _dias_vto; vacío = 60);
+    //  · los cobros hasta hoy pagan primero lo más antiguo (incluye las filas «regularización…»);
+    //  · los recibos domiciliados que aún no han vencido NO cuentan como cobrados: son deuda sin vencer.
+    let pag = 0;
+    if (m.v) {
+      // Libro de Eurored (CLIENTES AC-AD): cada fila lleva su vencimiento.
+      //  · deuda total = todo lo facturado − todo lo cobrado (los recibos ya emitidos cuentan como cobrados);
+      //  · no vencida = lo pendiente de las filas que vencen después de hoy, sin pasar del total ni bajar de 0;
+      //  · vencida = total − no vencida.
+      let tot = 0, fut = 0;
+      for (const k of b.filas) {
+        const x = m.tot[k] - m.cob[k];
+        tot += x; if (m.v[k] > TODAY) fut += x;
+        if (m.cob[k] && m.d[k] <= TODAY) pag += m.cob[k];
+      }
+      tot = r2(tot); fut = r2(fut);
+      const nv = r2(Math.max(0, Math.min(tot, fut)));
+      b.plazo = -1; b.pagado = r2(pag);
+      b.total = tot; b.sinVencer = nv; b.vencida = r2(tot - nv); b.porVencer = 0;
+    } else {
+    const p = (D.dvto || [])[b.bi], plazo = p == null ? 60 : p, lim = TODAY - plazo;
+    let sv = 0, sn = 0;
+    for (const k of b.filas) {
+      const t = m.t[k], d = m.d[k];
+      if (t === 0 || t === 3) { if (d <= lim) sv += m.tot[k]; else sn += m.tot[k]; }
+      if (m.cob[k] && d <= TODAY) pag += m.cob[k];
+    }
+    sv = r2(sv); sn = r2(sn); pag = r2(pag);   // igual que CLIENTES AD, AE y AF
+    const ven = r2(sv - pag >= 0 ? sv - pag : Math.min(0, sv + sn - pag));
+    b.plazo = plazo; b.pagado = pag;
+    b.vencida = r2(ven); b.sinVencer = r2(sv + sn - pag - ven); b.total = r2(sv + sn - pag);
+    b.porVencer = r2(b.filas.reduce((s, k) => s + (m.t[k] === 2 && m.d[k] > TODAY ? m.cob[k] : 0), 0));
+    }
+    b.saldo = b.total;   // deuda total = vencida + sin vencer
     b.estado = 0; b.dias = null;
     if (b.saldo > 0.5) {
       // antigüedad: la venta más antigua que queda sin cubrir (los cobros pagan primero lo más viejo)
       const ventas = b.filas.filter(k => m.t[k] === 0 || m.t[k] === 3).sort((x, y) => m.d[x] - m.d[y]);
-      let resto = b.cobrado, desde = null;
+      let resto = pag, desde = null;
       for (const k of ventas) { resto -= m.tot[k]; if (resto < -0.5) { desde = m.d[k]; break; } }
       if (desde == null && ventas.length) desde = m.d[ventas[ventas.length - 1]];
       b.dias = desde == null ? 0 : Math.max(0, TODAY - desde);
@@ -288,7 +359,7 @@ const VISTAS = {
       const d = m.d[k], t = m.t[k], yy = yearOf(d);
       if (yy === y) {
         const mes = dDate(d).getUTCMonth();
-        if (t === 0 || t === 3) { v += m.tot[k]; com += m.com[k]; porMes[mes] += m.tot[k]; top.set(m.b[k], (top.get(m.b[k]) || 0) + m.tot[k]); if (t === 0) ops++; }
+        if (t === 0 || t === 3) { v += m.tot[k]; com += m.com[k]; porMes[mes] += m.tot[k]; top.set(m.a[k], (top.get(m.a[k]) || 0) + m.tot[k]); if (t === 0) ops++; }
         if (D.esCobro(k) && d <= TODAY) { c += m.cob[k]; porMesC[mes] += m.cob[k]; }
       } else if (yy === y - 1 && d - iniA < corte) {
         if (t === 0 || t === 3) vAnt += m.tot[k];
@@ -296,6 +367,8 @@ const VISTAS = {
       }
     }
     const deuda = B.filter(b => b.saldo > 0.5), totD = deuda.reduce((s, b) => s + b.saldo, 0);
+    const totV = deuda.reduce((s, b) => s + b.vencida, 0), totSV = deuda.reduce((s, b) => s + b.sinVencer, 0);
+    const conVen = deuda.filter(b => b.vencida > 0.5).length;
     const porEstado = [1, 2, 3].map(e => deuda.filter(b => b.estado === e).reduce((s, b) => s + b.saldo, 0));
     const ventasA = D.anios.map(a => 0), cobA = D.anios.map(a => 0);
     for (let k = 0; k < m.d.length; k++) {
@@ -310,8 +383,13 @@ const VISTAS = {
     const topL = [...top.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
     return `
     <div class="kpis">
-      <button class="kpi big" data-go="deudas" style="text-align:left"><div class="l">Pendiente de cobro hoy</div><div class="v num">${eur0(totD)}</div>
-        <div class="s">${deuda.length} barcos · ${eur0(porEstado[2])} con más de un año</div></button>
+      <div class="kpi big"><button data-go="deudas" style="text-align:left;width:100%;color:inherit"><div class="l">Deuda total hoy</div><div class="v num">${eur0(totD)}</div>
+        <div class="s">${deuda.length} cuentas · ${conVen} con deuda vencida</div></button>
+        <div class="trio" style="margin-top:10px">
+          <button class="x ven" data-dven="1"><div class="l">Vencida</div><div class="v num">${eur0(totV)}</div></button>
+          <button class="x sv" data-dven="2"><div class="l">Sin vencer</div><div class="v num">${eur0(totSV)}</div></button>
+          <button class="x" data-dven="0"><div class="l">Total</div><div class="v num">${eur0(totD)}</div></button>
+        </div></div>
     </div>
     ${chipsAnio(y, "anio")}
     <div class="kpis">
@@ -328,7 +406,7 @@ const VISTAS = {
         <div class="bar" style="margin-top:5px"><i style="width:${totD ? porEstado[i] / totD * 100 : 0}%;background:${col}"></i></div></div></button>`).join("")}
     </div>
     <div class="card"><h2>Próximos recibos · 30 días</h2>
-      ${prox.length ? `<div class="list" style="box-shadow:none;margin:0 -14px -14px">${prox.slice(0, 12).map(k => fila(B[m.b[k]], `vence ${fdate(m.d[k])}`, eur(m.cob[k]))).join("")}</div>` : `<div class="empty">No hay recibos en los próximos 30 días.</div>`}
+      ${prox.length ? `<div class="list" style="box-shadow:none;margin:0 -14px -14px">${prox.slice(0, 12).map(k => fila(B[m.a[k]], `vence ${fdate(m.d[k])}`, eur(m.cob[k]))).join("")}</div>` : `<div class="empty">No hay recibos en los próximos 30 días.</div>`}
     </div>
     <div class="card"><h2>Top 10 barcos · ${y}</h2>
       <div class="list" style="box-shadow:none;margin:0 -14px -14px">${topL.map(([bi, x], i) => fila(B[bi], `${i + 1}. ${B[bi].titular || B[bi].puerto}`, eur0(x))).join("") || `<div class="empty">Sin ventas.</div>`}</div>
@@ -339,26 +417,48 @@ const VISTAS = {
 
   deudas() {
     const q = norm(S.dq);
-    let l = B.filter(b => b.saldo > 0.5 && (!S.dFiltro || b.estado === S.dFiltro) && (!q || b.key.includes(q)));
-    l.sort(S.dOrden === "importe" ? (a, b) => b.saldo - a.saldo : S.dOrden === "dias" ? (a, b) => b.dias - a.dias : (a, b) => a.nombre.localeCompare(b.nombre, "es"));
+    const venOk = b => !S.dVen || (S.dVen === 1 ? b.vencida > 0.5 : b.sinVencer > 0.5);
+    let l = B.filter(b => b.saldo > 0.5 && venOk(b) && (!S.dFiltro || b.estado === S.dFiltro) && (!q || b.key.includes(q)));
+    l.sort(S.dOrden === "importe" ? (a, b) => b.saldo - a.saldo : S.dOrden === "vencida" ? (a, b) => b.vencida - a.vencida || b.saldo - a.saldo
+      : S.dOrden === "dias" ? (a, b) => b.dias - a.dias : (a, b) => a.nombre.localeCompare(b.nombre, "es"));
     const tot = l.reduce((s, b) => s + b.saldo, 0), lim = S.lim.deudas || 60;
+    const tV = l.reduce((s, b) => s + b.vencida, 0), tSV = l.reduce((s, b) => s + b.sinVencer, 0);
     const n = e => B.filter(b => b.saldo > 0.5 && b.estado === e).length;
     return `
     <div class="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><input id="dq" type="search" placeholder="Buscar barco, titular o puerto" value="${esc(S.dq)}"></div>
+    <div class="chips">${[["Toda la deuda", 0], ["Con vencida", 1], ["Con sin vencer", 2]].map(([l, e]) => `<button class="chip ${S.dVen === e ? "on" : ""}" data-dven="${e}">${l}</button>`).join("")}</div>
     <div class="chips">${[["Todas", 0], ["Reciente", 1], ["Vigilar", 2], ["Antigua", 3]].map(([l, e]) => `<button class="chip ${S.dFiltro === e ? "on" : ""}" data-df="${e}">${l}${e ? " · " + n(e) : ""}</button>`).join("")}
       <span style="flex:1"></span>
-      ${[["importe", "Importe"], ["dias", "Antigüedad"], ["nombre", "A-Z"]].map(([k, l]) => `<button class="chip ${S.dOrden === k ? "on" : ""}" data-do="${k}">${l}</button>`).join("")}</div>
-    <div class="tot"><span>${l.length} barcos</span><b class="num">${eur(tot)}</b></div>
-    <div class="list">${l.slice(0, lim).map(b => fila(b, `${esc(b.titular || "—")} · ${esc(b.puerto)}`, eur(b.saldo), `<span class="est ${ESTADOS[b.estado][1]}">${ESTADOS[b.estado][0]} · ${dias(b.dias)}</span>`)).join("") || `<div class="empty">No hay deudas con este filtro.</div>`}
+      ${[["importe", "Total"], ["vencida", "Vencida"], ["dias", "Antigüedad"], ["nombre", "A-Z"]].map(([k, l]) => `<button class="chip ${S.dOrden === k ? "on" : ""}" data-do="${k}">${l}</button>`).join("")}</div>
+    <div class="trio" style="margin-bottom:10px">
+      <div class="x ven"><div class="l">Vencida</div><div class="v num">${eur0(tV)}</div></div>
+      <div class="x sv"><div class="l">Sin vencer</div><div class="v num">${eur0(tSV)}</div></div>
+      <div class="x"><div class="l">Total · ${l.length} barcos</div><div class="v num">${eur0(tot)}</div></div>
+    </div>
+    <div class="list">${l.slice(0, lim).map(b => fila(b, `${esc(b.titular || "—")} · ${esc(b.puerto)}`, eur(b.saldo),
+      `<div class="vs">${b.vencida > 0.005 || b.vencida < -0.005 ? `<span class="ven">venc. ${eur0(b.vencida)}</span>` : "nada vencido"}${b.sinVencer > 0.5 ? ` · sin vencer ${eur0(b.sinVencer)}` : ""}</div><span class="est ${ESTADOS[b.estado][1]}">${ESTADOS[b.estado][0]} · ${dias(b.dias)}</span>`)).join("") || `<div class="empty">No hay deudas con este filtro.</div>`}
     ${l.length > lim ? `<button class="more" data-more="deudas">Ver más (${l.length - lim})</button>` : ""}</div>`;
   },
 
   barcos() {
     const q = norm(S.bq);
+    const modo = `<div class="seg">${[["barco", "Barcos"], ["cliente", "Clientes"]].map(([k, l]) => `<button class="${(S.bModo || "barco") === k ? "on" : ""}" data-bm="${k}">${l}</button>`).join("")}</div>`;
+    if (S.bModo === "cliente" && D.clientes) {
+      let lc = [...D.cuentasCli.keys()].filter(ci => ci >= 0).map(ci => agregado(ci, false)).filter(c => !q || c.key.includes(q));
+      lc.sort(S.bOrden === "ventas" ? (a, b) => b.ventas - a.ventas : S.bOrden === "reciente" ? (a, b) => (ult(b) - ult(a)) : (a, b) => a.titular.localeCompare(b.titular, "es"));
+      const limc = S.lim.barcos || 80;
+      return `${modo}
+    <div class="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><input id="bq" type="search" placeholder="Buscar cliente o barco" value="${esc(S.bq)}"></div>
+    <div class="chips">${[["ventas", "Más ventas"], ["reciente", "Último movimiento"], ["nombre", "A-Z"]].map(([k, l]) => `<button class="chip ${S.bOrden === k ? "on" : ""}" data-bo="${k}">${l}</button>`).join("")}</div>
+    <div class="tot"><span>${lc.length} clientes</span></div>
+    <div class="list">${lc.slice(0, limc).map(c => `<button class="row" data-cli="${c.ci}"><span class="dot" style="background:${c.saldo > 0.5 ? ["", "var(--verde)", "var(--ambar)", "var(--rojo)"][c.estado] : "var(--line)"}"></span><div class="m"><div class="t">${esc(c.titular)}</div><div class="d">${c.n} barco${c.n === 1 ? "" : "s"} · ${esc(c.barcos)}</div></div>
+      <div class="r"><div class="a num">${c.saldo > 0.5 ? `<span style="color:var(--rojo)">${eur0(c.saldo)}</span>` : `<span style="color:var(--verde)">al día</span>`}</div><span style="font-size:12px;color:var(--sub)">${eur0(c.ventas)} vendido</span></div></button>`).join("") || `<div class="empty">Ningún cliente coincide.</div>`}
+    ${lc.length > limc ? `<button class="more" data-more="barcos">Ver más (${lc.length - limc})</button>` : ""}</div>`;
+    }
     let l = B.filter(b => b.filas.length && (!q || b.key.includes(q)));
     l.sort(S.bOrden === "ventas" ? (a, b) => b.ventas - a.ventas : S.bOrden === "reciente" ? (a, b) => (ult(b) - ult(a)) : (a, b) => a.nombre.localeCompare(b.nombre, "es"));
     const lim = S.lim.barcos || 80;
-    return `
+    return `${D.clientes ? modo : ""}
     <div class="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><input id="bq" type="search" placeholder="Buscar barco, titular o puerto" value="${esc(S.bq)}"></div>
     <div class="chips">${[["ventas", "Más ventas"], ["reciente", "Último movimiento"], ["nombre", "A-Z"]].map(([k, l]) => `<button class="chip ${S.bOrden === k ? "on" : ""}" data-bo="${k}">${l}</button>`).join("")}</div>
     <div class="tot"><span>${l.length} barcos</span></div>
@@ -405,9 +505,56 @@ function fila(b, sub, der, extra = "") {
 }
 
 // ======================================================== ficha de barco
-let F = { b: null, seg: "entregas", anio: "todos" };
+let F = { b: null, a: null, ci: -1, seg: "entregas", anio: "todos" };
+const r2c = x => (Math.sign(x) * Math.round(Math.abs(x) * 100 + 1e-7) / 100) || 0;
+// todas las cuentas de un cliente sumadas (selector BARCO = «Todos sus barcos»)
+function agregado(ci, conFilas = true) {
+  const cs = (D.cuentasCli.get(ci) || []).map(a => B[a]).filter(b => b.filas.length);
+  const g = { i: -1, ci, cuentas: cs, n: cs.length, nombre: "Todos sus barcos", titular: cs.length ? cs[0].titular : "", puerto: [...new Set(cs.map(b => b.puerto))].join(", "),
+    prov: "", tel: (cs.find(b => b.tel) || { tel: "" }).tel, barcos: cs.map(b => b.nombre).join(", "),
+    ventas: 0, cobrado: 0, com: 0, uVenta: null, uCobro: null, primera: null, filas: [], porAnio: {},
+    vencida: 0, sinVencer: 0, total: 0, saldo: 0, porVencer: 0, pagado: 0, estado: 0, dias: null, plazo: cs.length ? cs[0].plazo : 60 };
+  for (const b of cs) {
+    for (const k of ["ventas", "cobrado", "com", "vencida", "sinVencer", "total", "saldo", "porVencer", "pagado"]) g[k] += b[k];
+    if (b.uVenta != null && (g.uVenta == null || b.uVenta > g.uVenta)) g.uVenta = b.uVenta;
+    if (b.uCobro != null && (g.uCobro == null || b.uCobro > g.uCobro)) g.uCobro = b.uCobro;
+    if (b.primera != null && (g.primera == null || b.primera < g.primera)) g.primera = b.primera;
+    if (b.saldo > 0.5 && (g.dias == null || b.dias > g.dias)) { g.dias = b.dias; }
+    if (conFilas) { for (const k of b.filas) g.filas.push(k); for (const y in b.porAnio) g.porAnio[y] = (g.porAnio[y] || 0) + b.porAnio[y]; }
+  }
+  for (const k of ["ventas", "cobrado", "com", "vencida", "sinVencer", "total", "saldo", "porVencer", "pagado"]) g[k] = r2c(g[k]);
+  if (g.saldo > 0.5 && g.dias != null) g.estado = g.dias <= 90 ? 1 : g.dias <= 365 ? 2 : 3;
+  if (cs.some(b => b.plazo !== g.plazo)) g.plazo = cs.some(b => b.plazo < 0) ? -1 : g.plazo;
+  g.key = norm(g.titular + " " + g.barcos + " " + g.puerto);
+  return g;
+}
+function abrirCliente(ci) {
+  F = { a: -1, ci, b: agregado(ci), seg: "entregas", anio: "todos", q: "" };
+  history.pushState({ ficha: "c" + ci }, "");
+  pintarFicha();
+  $("#ficha").scrollTop = 0;
+  $("#ficha").classList.add("on");
+}
+function elegir(a, ci) {   // a = cuenta concreta, o -1 = todos los barcos del cliente ci
+  F.a = a; F.ci = a >= 0 ? B[a].ci : ci; F.b = a >= 0 ? B[a] : agregado(ci); F.anio = "todos";
+  pintarFicha(); $("#ficha").scrollTop = 0;
+}
+function selectores() {
+  if (!D.clientes || F.ci < 0) return "";
+  const b = F.b;
+  // CLIENTE: con un barco elegido, sus dueños; con «Todos sus barcos», el cliente
+  const duenos = F.a >= 0 ? (D.cuentasBarco.get(B[F.a].bi) || []).map(a => B[a]).filter(x => x.ci >= 0) : [];
+  const optC = F.a >= 0 ? duenos.map(x => `<option value="${x.i}" ${x.i === F.a ? "selected" : ""}>${esc(x.titular)}${x.saldo > 0.5 ? " · debe " + eur0(x.saldo) : ""}</option>`).join("")
+    : `<option selected>${esc(b.titular)}</option>`;
+  // BARCO: los barcos de ese cliente, o todos
+  const suyos = (D.cuentasCli.get(F.ci) || []).map(a => B[a]).filter(x => x.filas.length);
+  const optB = (suyos.length > 1 ? `<option value="-1" ${F.a === -1 ? "selected" : ""}>Todos sus barcos (${suyos.length})</option>` : "") +
+    suyos.map(x => `<option value="${x.i}" ${x.i === F.a ? "selected" : ""}>${esc(x.nombre)}${x.saldo > 0.5 ? " · " + eur0(x.saldo) : ""}</option>`).join("");
+  return `<div class="sel2"><label>Cliente${F.a >= 0 && duenos.length > 1 ? ` · ${duenos.length} dueños` : ""}<select id="fcli" ${F.a >= 0 && duenos.length > 1 ? "" : "disabled"}>${optC}</select></label>
+    <label>Barco<select id="fbar" ${suyos.length > 1 ? "" : "disabled"}>${optB}</select></label></div>`;
+}
 function abrirFicha(i, seg) {
-  F = { b: B[i], seg: seg || "entregas", anio: "todos", q: "" };
+  F = { b: B[i], a: i, ci: B[i].ci, seg: seg || "entregas", anio: "todos", q: "" };
   history.pushState({ ficha: i }, "");
   pintarFicha();
   $("#ficha").scrollTop = 0;
@@ -449,15 +596,26 @@ function pintarFicha() {
   const tel = b.tel.split(/[\/ ]+/).filter(x => x.replace(/\D/g, "").length >= 9)[0] || "";
   $("#ficha").innerHTML = `
   <div class="fhead"><div class="top"><button class="back" id="fback" aria-label="Volver"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"><path d="M15 5l-7 7 7 7"/></svg></button></div>
-    <h2>${esc(b.nombre)}</h2><div class="tit">${esc(b.titular || "—")} · ${esc(b.puerto)}${b.prov ? " (" + esc(b.prov) + ")" : ""}</div>
+    <h2>${esc(F.a === -1 ? b.titular : b.nombre)}</h2><div class="tit">${F.a === -1 ? esc(b.n + " barcos · " + b.puerto) : esc(b.titular || "—") + " · " + esc(b.puerto) + (b.prov ? " (" + esc(b.prov) + ")" : "")}</div>
+    ${selectores()}
     <div class="acts">${tel ? `<a href="tel:${esc(tel.replace(/[^\d+]/g, ""))}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 3h4l2 5-2.5 1.5a11 11 0 0 0 6 6L16 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 5a2 2 0 0 1 2-2"/></svg>Llamar ${esc(tel)}</a>` : `<a style="opacity:.55">Sin teléfono en la ficha</a>`}</div>
   </div>
   <div class="fbody">
+    <div class="card"><h2>Deuda a hoy</h2>
+      ${b.saldo > 0.5 || b.saldo < -0.5 ? `<div class="trio f">
+        <div class="x ven ${Math.abs(b.vencida) < 0.005 ? "cero" : ""}"><div class="l">Vencida</div><div class="v num">${eur(b.vencida)}</div></div>
+        <div class="x sv ${Math.abs(b.sinVencer) < 0.005 ? "cero" : ""}"><div class="l">Sin vencer</div><div class="v num">${eur(b.sinVencer)}</div></div>
+        <div class="x"><div class="l">Total</div><div class="v num" style="color:${b.saldo > 0.5 ? "var(--txt)" : "var(--verde)"}">${eur(b.saldo)}</div></div></div>
+        <div class="nota">${b.saldo > 0.5 ? `<span class="est ${ESTADOS[b.estado][1]}">${ESTADOS[b.estado][0]} · ${dias(b.dias)}</span> · ` : "Saldo a favor del cliente · "}${b.plazo < 0 ? "vencimientos según factura" : "pago a " + (b.plazo ? b.plazo + " días" : "contado")}${b.porVencer > 0.5 ? ` · incluye ${eur(b.porVencer)} en recibos por vencer` : ""}</div>`
+        : `<div class="v" style="font-size:20px;font-weight:750;color:var(--verde)">Al día</div><div class="nota">${b.plazo < 0 ? "vencimientos según factura" : "pago a " + (b.plazo ? b.plazo + " días" : "contado")}</div>`}
+    </div>
+    ${F.a === -1 && b.cuentas.length > 1 ? `<div class="card desg"><h2>Deuda por barco</h2><div class="list" style="box-shadow:none;margin:0 -14px -14px">${b.cuentas.slice().sort((x, y) => y.saldo - x.saldo).map(x => `<button class="row" data-fsel="${x.i}"><div class="m"><div class="t">${esc(x.nombre)}</div>
+      <div class="vs">${Math.abs(x.saldo) < 0.5 ? "al día" : `${x.vencida > 0.005 || x.vencida < -0.005 ? `<span class="ven">venc. ${eur0(x.vencida)}</span>` : "nada vencido"}${x.sinVencer > 0.5 ? ` · sin vencer ${eur0(x.sinVencer)}` : ""}`}</div></div>
+      <div class="r"><div class="a num">${eur(x.saldo)}</div></div></button>`).join("")}</div></div>` : ""}
     <div class="kpis">
-      <div class="kpi"><div class="l">Pendiente</div><div class="v num" style="color:${b.saldo > 0.5 ? "var(--rojo)" : "var(--verde)"}">${b.saldo > 0.5 ? eur(b.saldo) : "Al día"}</div><div class="s">${b.saldo > 0.5 ? `<span class="est ${ESTADOS[b.estado][1]}">${ESTADOS[b.estado][0]} · ${dias(b.dias)}</span>` : (b.saldo < -0.5 ? "a favor " + eur(-b.saldo) : "")}</div></div>
       <div class="kpi"><div class="l">Último pago</div><div class="v" style="font-size:17px">${b.uCobro != null ? fdate(b.uCobro) : "—"}</div><div class="s">última compra ${b.uVenta != null ? fdate(b.uVenta) : "—"}</div></div>
       <div class="kpi"><div class="l">Vendido (con IVA)</div><div class="v num" style="font-size:17px">${eur0(b.ventas)}</div><div class="s">cliente desde ${b.primera != null ? yearOf(b.primera) : "—"}</div></div>
-      <div class="kpi"><div class="l">Comisión total</div><div class="v num" style="font-size:17px">${eur0(b.com)}</div><div class="s">cobrado ${eur0(b.cobrado)}</div></div>
+      <div class="kpi" style="grid-column:1/-1"><div class="l">Comisión total</div><div class="v num" style="font-size:17px">${eur0(b.com)}</div><div class="s">cobrado ${eur0(b.cobrado)}</div></div>
     </div>
     ${prox.length ? `<div class="card"><h2>Recibos por vencer</h2>${prox.map(k => `<div class="ln"><span>${fdate(m.d[k])}</span><b class="num">${eur(m.cob[k])}</b></div>`).join("")}</div>` : ""}
     <div class="card"><h2>Compras por año</h2>${barras([serie], D.anios.map(a => String(a).slice(2)), ["var(--ventas)"], 110)}</div>
@@ -476,7 +634,7 @@ function abrirProducto(c) {
   $("#ficha").innerHTML = `
   <div class="fhead"><div class="top"><button class="back" id="fback" aria-label="Volver"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"><path d="M15 5l-7 7 7 7"/></svg></button></div>
     <h2 style="font-size:19px">${esc(D.conceptos[c])}</h2><div class="tit">${ks.length} entregas · ${NFq.format(ks.reduce((s, k) => s + m.u[k], 0))} uds/kg en total</div></div>
-  <div class="fbody"><div class="list">${ks.slice(0, 300).map(k => `<button class="row" data-b="${m.b[k]}"><div class="m"><div class="t">${esc(B[m.b[k]].nombre)}</div><div class="d num">${fdate(m.d[k])} · ${esc(D.facturas[m.f[k]] || "")} · ${NFq.format(m.u[k])} × ${NF2.format(m.p[k])} €</div></div><div class="r"><div class="a num">${eur(m.tot[k])}</div></div></button>`).join("")}</div></div>`;
+  <div class="fbody"><div class="list">${ks.slice(0, 300).map(k => `<button class="row" data-b="${m.a[k]}"><div class="m"><div class="t">${esc(B[m.a[k]].nombre)}</div><div class="d num">${fdate(m.d[k])} · ${esc(D.facturas[m.f[k]] || "")} · ${NFq.format(m.u[k])} × ${NF2.format(m.p[k])} €</div></div><div class="r"><div class="a num">${eur(m.tot[k])}</div></div></button>`).join("")}</div></div>`;
   $("#ficha").scrollTop = 0;
   $("#ficha").classList.add("on");
 }
@@ -487,12 +645,16 @@ document.addEventListener("click", e => {
   const ds = t.dataset;
   if (t.id === "fback") { history.back(); return; }
   if (ds.b != null) { abrirFicha(+ds.b); return; }
+  if (ds.cli != null) { abrirCliente(+ds.cli); return; }
+  if (ds.fsel != null) { elegir(+ds.fsel, F.ci); return; }
+  if (ds.bm) { S.bModo = ds.bm; S.lim.barcos = 0; pintar(); return; }
   if (ds.v) { S.vista = ds.v; pintar(); return; }
   if (ds.go) { S.vista = ds.go; pintar(); return; }
   if (ds.dest) { S.vista = "deudas"; S.dFiltro = +ds.dest; pintar(); return; }
   if (ds.anio) { S.anio = +ds.anio; pintar(); return; }
   if (ds.panio) { S.pAnio = +ds.panio; S.lim.productos = 0; pintar(); return; }
   if (ds.df != null) { S.dFiltro = +ds.df; S.lim.deudas = 0; pintar(); return; }
+  if (ds.dven != null) { S.vista = "deudas"; S.dVen = +ds.dven; if (S.dVen === 1 && S.dOrden === "importe") S.dOrden = "vencida"; S.lim.deudas = 0; pintar(); return; }
   if (ds.do) { S.dOrden = ds.do; pintar(); return; }
   if (ds.bo) { S.bOrden = ds.bo; pintar(); return; }
   if (ds.more) { S.lim[ds.more] = (S.lim[ds.more] || { deudas: 60, barcos: 80, productos: 40 }[ds.more]) * 3; pintar(); return; }
@@ -505,6 +667,10 @@ document.addEventListener("input", e => {
   S[id] = e.target.value; const pos = e.target.selectionStart;
   clearTimeout(window._qt);
   window._qt = setTimeout(() => { pintar(); const el = document.getElementById(id); el.focus(); try { el.setSelectionRange(pos, pos); } catch (x) { } }, 180);
+});
+document.addEventListener("change", e => {
+  if (e.target.id === "fcli") elegir(+e.target.value, F.ci);
+  if (e.target.id === "fbar") elegir(+e.target.value, F.ci);
 });
 window.addEventListener("popstate", () => cerrarFicha());
 
