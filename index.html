@@ -279,14 +279,14 @@ function preparar(data) {
       pagB = r2(ks.reduce((u, k) => u + (m.t[k] === 0 || m.t[k] === 3 ? m.tot[k] : 0), 0) - tot);   // lo ya pagado, para el FIFO
     } else {
       // Libro de Chesky (CLIENTES AD-AH con DEUDORES!J4 = hoy): una venta vence a los «días de pago» del cliente
-      // (vacío = 60); los cobros hasta hoy pagan primero lo más antiguo (incluye las «regularización…»); los recibos
-      // domiciliados que aún no han vencido NO cuentan como cobrados: son deuda sin vencer.
+      // (vacío = 60); los cobros pagan primero lo más antiguo (incluye las «regularización…»). Igual que Eurored, un
+      // recibo domiciliado se da por cobrado desde que se emite; si se devuelve, la devolución vuelve a ser deuda.
       const p = (D.dvto || [])[bi]; plazo = p == null ? 60 : p; lim = TODAY - plazo;
       let sv = 0, sn = 0;
       for (const k of ks) {
         const t = m.t[k], d = m.d[k];
         if (t === 0 || t === 3) { if (d <= lim) sv += m.tot[k]; else sn += m.tot[k]; }
-        if (m.cob[k] && d <= TODAY) pagB += m.cob[k];
+        if (m.cob[k]) pagB += m.cob[k];   // un recibo domiciliado cuenta como cobrado aunque no haya vencido (como Eurored)
       }
       sv = r2(sv); sn = r2(sn); pagB = r2(pagB);   // igual que CLIENTES AD, AE y AF
       ven = r2(sv - pagB >= 0 ? sv - pagB : Math.min(0, sv + sn - pagB)); tot = r2(sv + sn - pagB); sin = r2(tot - ven);
@@ -636,7 +636,7 @@ function pintarFicha() {
         <div class="x ven ${Math.abs(b.vencida) < 0.005 ? "cero" : ""}"><div class="l">Vencida</div><div class="v num">${eur(b.vencida)}</div></div>
         <div class="x sv ${Math.abs(b.sinVencer) < 0.005 ? "cero" : ""}"><div class="l">Sin vencer</div><div class="v num">${eur(b.sinVencer)}</div></div>
         <div class="x"><div class="l">Total</div><div class="v num" style="color:${b.saldo > 0.5 ? "var(--txt)" : "var(--verde)"}">${eur(b.saldo)}</div></div></div>
-        <div class="nota">${b.saldo > 0.5 ? `<span class="est ${ESTADOS[b.estado][1]}">${ESTADOS[b.estado][0]} · ${dias(b.dias)}</span> · ` : "Saldo a favor del cliente · "}${b.plazo < 0 ? "vencimientos según factura" : "pago a " + (b.plazo ? b.plazo + " días" : "contado")}${b.porVencer > 0.5 ? ` · incluye ${eur(b.porVencer)} en recibos por vencer` : ""}</div>`
+        <div class="nota">${b.saldo > 0.5 ? `<span class="est ${ESTADOS[b.estado][1]}">${ESTADOS[b.estado][0]} · ${dias(b.dias)}</span> · ` : "Saldo a favor del cliente · "}${b.plazo < 0 ? "vencimientos según factura" : "pago a " + (b.plazo ? b.plazo + " días" : "contado")}${b.porVencer > 0.5 ? ` · ${eur(b.porVencer)} en recibos domiciliados aún sin vencer (se dan por cobrados)` : ""}</div>`
         : `<div class="v" style="font-size:20px;font-weight:750;color:var(--verde)">Al día</div><div class="nota">${b.plazo < 0 ? "vencimientos según factura" : "pago a " + (b.plazo ? b.plazo + " días" : "contado")}</div>`}
     </div>
     ${F.a === -1 && b.cuentas.length > 1 ? `<div class="card desg"><h2>Deuda por barco</h2><div class="list" style="box-shadow:none;margin:0 -14px -14px">${b.cuentas.slice().sort((x, y) => y.saldo - x.saldo).map(x => `<button class="row" data-fsel="${x.i}"><div class="m"><div class="t">${esc(x.nombre)}</div>
