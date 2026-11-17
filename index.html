@@ -325,6 +325,10 @@ const store = {
 let D, B, S = { vista: "resumen", anio: null, dFiltro: 0, dVen: 0, dOrden: "importe", dq: "", bq: "", bOrden: "ventas", pAnio: null, pq: "", lim: {} };
 function preparar(data) {
   D = data;
+  // nombres en MAYÚSCULAS: barcos, titulares y clientes
+  const MAY = v => typeof v === "string" ? v.toLocaleUpperCase("es-ES") : v;
+  if (D.clientes) D.clientes = D.clientes.map(MAY);
+  for (const x of D.barcos) { x[0] = MAY(x[0]); x[1] = MAY(x[1]); }
   const m = D.mov, n = m.d.length, nb = D.barcos.length;
   // las regularizaciones del cuadre cuentan para la deuda, pero no son cobros reales
   D.ajuste = new Set(D.conceptos.map((c, i) => /^regulariz/i.test(c) ? i : -1).filter(i => i >= 0));
@@ -392,6 +396,9 @@ function preparar(data) {
       sv = r2(sv); sn = r2(sn); pagB = r2(pagB);   // igual que CLIENTES AD, AE y AF
       ven = r2(sv - pagB >= 0 ? sv - pagB : Math.min(0, sv + sn - pagB)); tot = r2(sv + sn - pagB); sin = r2(tot - ven);
     }
+    // restos de céntimos del cuadre (p. ej. 0,02 € de hace años) no convierten la deuda en «vencida» ni «antigua»
+    if (Math.abs(ven) < 0.05 && Math.abs(sin) >= 0.05) { sin = tot; ven = 0; }
+    else if (Math.abs(sin) < 0.05 && Math.abs(ven) >= 0.05) { ven = tot; sin = 0; }
     // Qué ventas quedan sin pagar y de quién son. MANDA LA FACTURA: un cobro que nombra su factura
     // («cobro factura C26-1392») paga esa factura; un cobro sin factura (recibo, a cuenta…) paga primero lo más
     // antiguo de SU cliente; lo que sobre paga lo más antiguo del barco. El total del barco no cambia (es el del
@@ -412,7 +419,11 @@ function preparar(data) {
       const c = m.cob[k]; if (!c) continue;
       const mm = /factura\s*n?º?\s*(C\d{2}-\d+)/i.exec(D.conceptos[m.c[k]] || "");
       const ref = mm && facK.get(mm[1].toUpperCase());
-      if (ref && c > 0) { const s = pagar(ref, c); if (s > 0.005) suma(poolA, m.a[ref[0]], s); }
+      if (ref && c > 0) {
+        const s = pagar(ref, c); if (s > 0.005) suma(poolA, m.a[ref[0]], s);
+        // la factura queda pagada aunque sus líneas dejen restos de redondeo (décimas de céntimo)
+        if (ref.reduce((u, k) => u + pend.get(k), 0) < 0.01) for (const k of ref) pend.set(k, 0);
+      }
       else suma(poolA, m.a[k], c);
     }
     let pool = 0;
@@ -420,7 +431,7 @@ function preparar(data) {
     if (pool > 0.005) pagar(ventas, pool);
     for (const k of ventas) {
       const out = pend.get(k), a = m.a[k];
-      if (out > 0.005) {
+      if (out >= 0.05) {
         const vencida = m.v ? m.v[k] <= TODAY : m.d[k] <= lim;
         const mp = vencida ? fv : fs; mp.set(a, (mp.get(a) || 0) + out);
         if (!desde.has(a)) desde.set(a, m.d[k]);
