@@ -362,8 +362,7 @@ function preparar(data) {
   const r2 = x => (Math.sign(x) * Math.round(Math.abs(x) * 100 + 1e-7) / 100) || 0;   // || 0 evita «-0,00 €»
   // ---- deuda por barco, repartida entre sus dueños
   // La deuda se calcula por BARCO, igual que el Excel (CLIENTES AC-AH). Si el barco tuvo varios dueños, los cobros
-  // pagan primero las ventas más antiguas (sean del dueño que sean) y la deuda que queda se reparte según de quién
-  // son las ventas pendientes. Así la suma de los dueños es siempre la deuda del barco.
+  // se reparte según de quién son las facturas que quedan sin pagar (manda la factura que nombra cada cobro). Así la suma de los dueños es siempre la deuda del barco.
   const rep = new Map();
   const ultMov = a => B[a].filas.reduce((x, k) => Math.max(x, m.d[k]), -1e9);
   for (const [bi, as] of D.cuentasBarco) {
@@ -393,18 +392,42 @@ function preparar(data) {
       sv = r2(sv); sn = r2(sn); pagB = r2(pagB);   // igual que CLIENTES AD, AE y AF
       ven = r2(sv - pagB >= 0 ? sv - pagB : Math.min(0, sv + sn - pagB)); tot = r2(sv + sn - pagB); sin = r2(tot - ven);
     }
-    // FIFO del barco: qué ventas quedan sin pagar y de qué dueño son
-    let resto = pagB; const fv = new Map(), fs = new Map(), desde = new Map();
+    // Qué ventas quedan sin pagar y de quién son. MANDA LA FACTURA: un cobro que nombra su factura
+    // («cobro factura C26-1392») paga esa factura; un cobro sin factura (recibo, a cuenta…) paga primero lo más
+    // antiguo de SU cliente; lo que sobre paga lo más antiguo del barco. El total del barco no cambia (es el del
+    // Excel); solo cambia a qué dueño se le asigna cuando el barco tuvo varios.
+    const fv = new Map(), fs = new Map(), desde = new Map(), pend = new Map(), facK = new Map(), poolA = new Map();
+    const suma = (mp, a, v) => mp.set(a, (mp.get(a) || 0) + v);
     for (const k of ventas) {
-      const x = m.tot[k];
-      if (x < 0) { resto -= x; continue; }   // un abono funciona como un pago
-      const pay = Math.min(Math.max(resto, 0), x); resto -= pay; const out = x - pay, a = m.a[k];
+      if (m.tot[k] < 0) { pend.set(k, 0); suma(poolA, m.a[k], -m.tot[k]); continue; }   // un abono funciona como un pago de su cliente
+      pend.set(k, m.tot[k]);
+      const fn = String(D.facturas[m.f[k]] || "").toUpperCase();
+      if (fn) { if (!facK.has(fn)) facK.set(fn, []); facK.get(fn).push(k); }
+    }
+    const pagar = (lista, imp) => {
+      for (const k of lista) { if (imp <= 0.005) break; const p = pend.get(k); if (p > 0.005) { const x = Math.min(p, imp); pend.set(k, p - x); imp -= x; } }
+      return imp;
+    };
+    for (const k of ks) {
+      const c = m.cob[k]; if (!c) continue;
+      const mm = /factura\s*n?º?\s*(C\d{2}-\d+)/i.exec(D.conceptos[m.c[k]] || "");
+      const ref = mm && facK.get(mm[1].toUpperCase());
+      if (ref && c > 0) { const s = pagar(ref, c); if (s > 0.005) suma(poolA, m.a[ref[0]], s); }
+      else suma(poolA, m.a[k], c);
+    }
+    let pool = 0;
+    for (const [a, v] of poolA) pool += v > 0.005 ? pagar(ventas.filter(k => m.a[k] === a), v) : v;
+    if (pool > 0.005) pagar(ventas, pool);
+    for (const k of ventas) {
+      const out = pend.get(k), a = m.a[k];
       if (out > 0.005) {
         const vencida = m.v ? m.v[k] <= TODAY : m.d[k] <= lim;
         const mp = vencida ? fv : fs; mp.set(a, (mp.get(a) || 0) + out);
         if (!desde.has(a)) desde.set(a, m.d[k]);
       }
     }
+    // restos de céntimos (redondeos de un pago) no se quedan en otro dueño si hay alguno con deuda de verdad
+    for (const mp of [fv, fs]) if (mp.size > 1 && [...mp.values()].some(v => v >= 0.05)) for (const [a, v] of [...mp]) if (v < 0.05) mp.delete(a);
     const ultima = as.slice().sort((x, y) => ultMov(y) - ultMov(x))[0];
     const reparte = (total, mp) => {
       const out = new Map();
