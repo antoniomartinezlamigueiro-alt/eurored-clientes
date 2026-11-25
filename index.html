@@ -380,7 +380,12 @@ function preparar(data) {
       //  · total = facturado − cobrado (los recibos emitidos cuentan como cobrados);
       //  · no vencida = lo pendiente de las filas que vencen después de hoy (entre 0 y el total); vencida = el resto.
       let fut = 0; tot = 0;
-      for (const k of ks) { const x = m.tot[k] - m.cob[k]; tot += x; if (m.v[k] > TODAY) fut += x; if (m.cob[k] && m.d[k] <= TODAY) pagB += m.cob[k]; }
+      // un cobro que nombra su factura («cobro factura C26-2057») paga esa factura: si la factura aún no vence,
+      // ese cobro descuenta de lo «sin vencer», no de lo vencido
+      const vtoF = new Map();
+      for (const k of ks) if ((m.t[k] === 0 || m.t[k] === 3) && m.f[k]) { const fn = String(D.facturas[m.f[k]]).toUpperCase(); vtoF.set(fn, Math.max(vtoF.get(fn) ?? -1e9, m.v[k])); }
+      const vtoDe = k => { if (!m.cob[k]) return m.v[k]; const mm = /factura\s*n?º?\s*(C\d{2}-\d+)/i.exec(D.conceptos[m.c[k]] || ""); const v = mm && vtoF.get(mm[1].toUpperCase()); return v != null && v > m.v[k] ? v : m.v[k]; };
+      for (const k of ks) { const x = m.tot[k] - m.cob[k]; tot += x; if (vtoDe(k) > TODAY) fut += x; if (m.cob[k] && m.d[k] <= TODAY) pagB += m.cob[k]; }
       tot = r2(tot); sin = r2(Math.max(0, Math.min(tot, r2(fut)))); ven = r2(tot - sin);
       pagB = r2(ks.reduce((u, k) => u + (m.t[k] === 0 || m.t[k] === 3 ? m.tot[k] : 0), 0) - tot);   // lo ya pagado, para el FIFO
     } else {
@@ -475,6 +480,30 @@ function preparar(data) {
       ord.forEach((a, i) => { const v = i === ord.length - 1 ? r2(total - acum) : r2(total * mp.get(a) / sum); acum = r2(acum + v); out.set(a, v); });
       return out;
     };
+    // Pendiente de cada factura según el listado de previsión de cobros de Eurored y los cobros posteriores (D.pf):
+    // si cuadra con la deuda del barco, la vencida, la sin vencer, la antigüedad y el dueño salen factura a factura.
+    let pfBarco = false;
+    if (D.pf && tot > 0.05) {
+      const fa = new Map();
+      for (const k of ventas) { const fn = String(D.facturas[m.f[k]] || "").toUpperCase(); if (fn && !fa.has(fn)) fa.set(fn, m.a[k]); }
+      let sp = 0; const L = [];
+      for (const [fn, a] of fa) for (const [p, v, e] of (D.pf[fn] || [])) { sp += p; L.push([a, p, v, e]); }
+      if (L.length && Math.abs(sp - tot) < 0.05) {
+        fv.clear(); fs.clear(); desde.clear(); let pv = 0;
+        for (const [a, p, v, e] of L) {
+          if (v <= TODAY) pv += p;
+          const mp = v <= TODAY ? fv : fs; mp.set(a, (mp.get(a) || 0) + p);
+          if (p >= 0.05 && (!desde.has(a) || e < desde.get(a))) desde.set(a, e);
+        }
+        for (const mp of [fv, fs]) for (const [a, v] of [...mp]) if (v < 0.005) mp.delete(a);
+        ven = r2(Math.min(tot, Math.max(0, pv))); sin = r2(tot - ven); pfBarco = true; D.pfBarcos = (D.pfBarcos || 0) + 1;
+      }
+    }
+    // vencida / sin vencer según las facturas que de verdad quedan pendientes (manda la factura que nombra cada
+    // cobro): si se pagó una factura que aún no vencía, lo que queda es de las anteriores y está vencido.
+    if (!pfBarco) { const pv = [...fv.values()].reduce((u, v) => u + v, 0), ps = [...fs.values()].reduce((u, v) => u + v, 0);
+      // solo en el libro de Chesky (sin vencimiento por fila); el de Eurored ya usa el vencimiento de cada fila
+      if (!m.v && tot > 0.005 && Math.abs(pv + ps - tot) < 0.10) { ven = r2(Math.min(tot, Math.max(0, pv))); sin = r2(tot - ven); } }
     const rv = reparte(ven, fv), rs = reparte(sin, fs);
     for (const a of as) rep.set(a, { ven: rv.get(a) || 0, sin: rs.get(a) || 0, plazo, desde: desde.get(a), solo: as.length === 1 });
   }
