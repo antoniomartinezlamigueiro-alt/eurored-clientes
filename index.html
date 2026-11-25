@@ -368,6 +368,7 @@ function preparar(data) {
   // La deuda se calcula por BARCO, igual que el Excel (CLIENTES AC-AH). Si el barco tuvo varios dueños, los cobros
   // se reparte según de quién son las facturas que quedan sin pagar (manda la factura que nombra cada cobro). Así la suma de los dueños es siempre la deuda del barco.
   const rep = new Map();
+  D.apl = new Map(); D.fref = new Map(); D.comp = new Set();   // a qué factura(s) fue cada cobro / recibo
   const ultMov = a => B[a].filas.reduce((x, k) => Math.max(x, m.d[k]), -1e9);
   for (const [bi, as] of D.cuentasBarco) {
     const ks = [];
@@ -405,30 +406,54 @@ function preparar(data) {
     // Excel); solo cambia a qué dueño se le asigna cuando el barco tuvo varios.
     const fv = new Map(), fs = new Map(), desde = new Map(), pend = new Map(), facK = new Map(), poolA = new Map();
     const suma = (mp, a, v) => mp.set(a, (mp.get(a) || 0) + v);
+    // qué aporta cada cobro (o abono) al bolsillo de su cliente, para saber después a qué factura fue cada cobro
+    const aport = new Map(), aporta = (a, k, v) => { if (!aport.has(a)) aport.set(a, []); aport.get(a).push([k, v]); };
+    const anota = (k, rec) => { if (!m.cob[k]) return; let l = D.apl.get(k); if (!l) D.apl.set(k, l = []);
+      for (const [kv, x] of rec) { const fn = D.facturas[m.f[kv]] || "s/n", e = l.find(z => z[0] === fn); if (e) e[1] += x; else l.push([fn, x]); } };
+    // reparte los pagos (en orden) entre los cobros que los hicieron (por fecha); una devolución o cobro negativo
+    // descuenta lo último cobrado antes. Lo que no paga nada se devuelve en «sobra» (pasa a lo más antiguo del barco).
+    const casar = (aps, rec, sobra) => {
+      const pos = []; let deb = 0;   // deb: lo que una devolución no pudo descontar de lo cobrado antes; se descuenta de lo siguiente
+      for (const [k, v] of aps.slice().sort((x, y) => m.d[x[0]] - m.d[y[0]] || x[0] - y[0])) {
+        if (v > 0) { const t = Math.min(v, deb); deb -= t; if (t > 0.005) D.comp.add(k); pos.push([k, v - t]); continue; }
+        let q = -v; for (let i = pos.length - 1; i >= 0 && q > 0.005; i--) { const t = Math.min(pos[i][1], q); if (t > 0.005) D.comp.add(pos[i][0]); pos[i][1] -= t; q -= t; }
+        deb += q;
+      }
+      let i = 0;
+      for (let [kv, x] of rec) while (x > 0.005 && i < pos.length) { const t = Math.min(pos[i][1], x); if (t > 0.005) anota(pos[i][0], [[kv, t]]); pos[i][1] -= t; x -= t; if (pos[i][1] <= 0.005) i++; }
+      if (sobra) for (const [k, v] of pos) if (v > 0.005) sobra.push([k, v]);
+    };
     for (const k of ventas) {
-      if (m.tot[k] < 0) { pend.set(k, 0); suma(poolA, m.a[k], -m.tot[k]); continue; }   // un abono funciona como un pago de su cliente
+      if (m.tot[k] < 0) { pend.set(k, 0); suma(poolA, m.a[k], -m.tot[k]); aporta(m.a[k], k, -m.tot[k]); continue; }   // un abono funciona como un pago de su cliente
       pend.set(k, m.tot[k]);
       const fn = String(D.facturas[m.f[k]] || "").toUpperCase();
       if (fn) { if (!facK.has(fn)) facK.set(fn, []); facK.get(fn).push(k); }
     }
-    const pagar = (lista, imp) => {
-      for (const k of lista) { if (imp <= 0.005) break; const p = pend.get(k); if (p > 0.005) { const x = Math.min(p, imp); pend.set(k, p - x); imp -= x; } }
+    const pagar = (lista, imp, rec) => {
+      for (const k of lista) { if (imp <= 0.005) break; const p = pend.get(k); if (p > 0.005) { const x = Math.min(p, imp); pend.set(k, p - x); imp -= x; if (rec) rec.push([k, x]); } }
       return imp;
     };
     for (const k of ks) {
       const c = m.cob[k]; if (!c) continue;
       const mm = /factura\s*n?º?\s*(C\d{2}-\d+)/i.exec(D.conceptos[m.c[k]] || "");
+      // la factura que nombra el cobro o el giro (concepto u observaciones) se enseña tal cual; para el cálculo de la
+      // deuda solo manda la que nombra el concepto («cobro factura …»), como hasta ahora
+      const fr = mm ? mm[1].toUpperCase() : (m.r && m.r[k] ? String(D.facturas[m.r[k]]).toUpperCase() : "");
+      if (fr) D.fref.set(k, fr);
       const ref = mm && facK.get(mm[1].toUpperCase());
       if (ref && c > 0) {
-        const s = pagar(ref, c); if (s > 0.005) suma(poolA, m.a[ref[0]], s);
+        const rec = []; const s = pagar(ref, c, rec); anota(k, rec); if (s > 0.005) { suma(poolA, m.a[ref[0]], s); aporta(m.a[ref[0]], k, s); }
         // la factura queda pagada aunque sus líneas dejen restos de redondeo (décimas de céntimo)
         if (ref.reduce((u, k) => u + pend.get(k), 0) < 0.01) for (const k of ref) pend.set(k, 0);
       }
-      else suma(poolA, m.a[k], c);
+      else { suma(poolA, m.a[k], c); aporta(m.a[k], k, c); }
     }
-    let pool = 0;
-    for (const [a, v] of poolA) pool += v > 0.005 ? pagar(ventas.filter(k => m.a[k] === a), v) : v;
-    if (pool > 0.005) pagar(ventas, pool);
+    let pool = 0; const sobra = [];
+    for (const [a, v] of poolA) {
+      if (v > 0.005) { const rec = []; pool += pagar(ventas.filter(k => m.a[k] === a), v, rec); casar(aport.get(a) || [], rec, sobra); }
+      else pool += v;
+    }
+    if (pool > 0.005) { const rec = []; pagar(ventas, pool, rec); casar(sobra, rec, null); }
     for (const k of ventas) {
       const out = pend.get(k), a = m.a[k];
       if (out >= 0.05) {
@@ -478,6 +503,15 @@ function preparar(data) {
   S.pAnio = S.pAnio || S.anio;
 }
 
+// factura(s) a la(s) que corresponde un cobro o un giro (recibo)
+function facDe(k) {
+  const m = D.mov, l = (D.apl.get(k) || []).filter(z => z[1] > 0.005), c = Math.abs(m.cob[k]);
+  if (D.fref.get(k)) return (m.t[k] === 2 ? "Giro de la factura " : "Factura ") + D.fref.get(k);
+  if (!l.length) return D.fref.get(k) ? "Factura " + D.fref.get(k) : m.cob[k] <= 0 ? "" : D.comp.has(k) ? "compensado con una devolución o regularización" : "a cuenta (sin factura pendiente)";
+  const usado = l.reduce((u, z) => u + z[1], 0), resto = c - usado;
+  if (l.length === 1 && resto < 0.05) return "Factura " + l[0][0];
+  return (l.length === 1 ? "Factura " : "Facturas ") + l.map(z => z[0] + " (" + eur(z[1]) + ")").join(" + ") + (resto >= 0.05 ? " + " + eur(resto) + (D.comp.has(k) ? " compensado" : " a cuenta") : "");
+}
 // ======================================================== gráficos (SVG)
 function barras(series, etiquetas, colores, h = 150) {
   const W = 340, H = h, pl = 34, pb = 18, pt = 8, n = etiquetas.length, g = series.length;
@@ -614,7 +648,7 @@ const VISTAS = {
         <div class="r"><div class="a num">${eur0(porEstado[i])}</div><span style="font-size:12px;color:var(--sub)">${Math.round(porEstado[i] / totE * 100)} %</span></div></button>`).join("")}
     </div>
     <div class="card"><h2>Próximos recibos <em>30 días</em></h2>
-      ${prox.length ? `<div class="list" style="box-shadow:none;border-radius:0;margin:0 -16px -16px">${prox.slice(0, 12).map(k => { const b = B[m.a[k]], t = dDate(m.d[k]); return `<button class="row" data-b="${b.i}"><span class="cal"><i>${MES3[t.getUTCMonth()]}</i><b>${t.getUTCDate()}</b></span><div class="m"><div class="t">${esc(b.nombre)}</div><div class="d">${esc(b.titular || b.puerto)}</div></div><div class="r"><div class="a num">${eur(m.cob[k])}</div></div></button>`; }).join("")}</div>` : `<div class="empty">No hay recibos en los próximos 30 días.</div>`}
+      ${prox.length ? `<div class="list" style="box-shadow:none;border-radius:0;margin:0 -16px -16px">${prox.slice(0, 12).map(k => { const b = B[m.a[k]], t = dDate(m.d[k]); return `<button class="row" data-b="${b.i}"><span class="cal"><i>${MES3[t.getUTCMonth()]}</i><b>${t.getUTCDate()}</b></span><div class="m"><div class="t">${esc(b.nombre)}</div><div class="d">${esc(b.titular || b.puerto)}</div>${facDe(k) ? `<div class="d" style="color:var(--m2);font-weight:600">${esc(facDe(k))}</div>` : ""}</div><div class="r"><div class="a num">${eur(m.cob[k])}</div></div></button>`; }).join("")}</div>` : `<div class="empty">No hay recibos en los próximos 30 días.</div>`}
     </div>
     <div class="card"><h2>Top 10 barcos <em>${y}</em></h2>
       <div class="list" style="box-shadow:none;border-radius:0;margin:0 -16px -16px">${topL.map(([bi, x], i) => `<button class="row" data-b="${bi}"><span class="rank r${i + 1}">${i + 1}</span><div class="m"><div class="t">${esc(B[bi].nombre)}</div><div class="d">${esc(B[bi].titular || B[bi].puerto)}</div><div class="bar fina"><i style="width:${x / maxTop * 100}%"></i></div></div><div class="r"><div class="a num">${eur0(x)}</div></div></button>`).join("") || `<div class="empty">Sin ventas.</div>`}</div>
@@ -794,7 +828,7 @@ function pintarFicha() {
       : `<div class="empty">Sin entregas${F.anio === "todos" ? "" : " en " + F.anio}.</div>`;
   } else if (F.seg === "cobros") {
     const cs = b.filas.filter(k => m.cob[k] && enAnio(k)).sort((x, y) => m.d[y] - m.d[x]);
-    cuerpo = cs.length ? `<div class="list">${cs.map(k => `<div class="row"><div class="m"><div class="t" style="font-weight:600">${esc(D.conceptos[m.c[k]])}</div><div class="d">${fdate(m.d[k])}${m.d[k] > TODAY ? " · pendiente de vencer" : ""}</div></div><div class="r"><div class="a num" style="color:${m.cob[k] < 0 ? "var(--rojo)" : "var(--verde)"}">${eur(m.cob[k])}</div></div></div>`).join("")}</div>`
+    cuerpo = cs.length ? `<div class="list">${cs.map(k => `<div class="row"><div class="m"><div class="t" style="font-weight:600">${esc(D.conceptos[m.c[k]])}</div><div class="d">${fdate(m.d[k])}${m.d[k] > TODAY ? " · pendiente de vencer" : ""}</div>${facDe(k) ? `<div class="d" style="color:var(--m2);font-weight:600">${esc(facDe(k))}</div>` : ""}</div><div class="r"><div class="a num" style="color:${m.cob[k] < 0 ? "var(--rojo)" : "var(--verde)"}">${eur(m.cob[k])}</div></div></div>`).join("")}</div>`
       : `<div class="empty">Sin cobros${F.anio === "todos" ? "" : " en " + F.anio}.</div>`;
   } else {
     const pr = new Map();
@@ -833,7 +867,7 @@ function pintarFicha() {
       <div class="kpi"><div class="l">Vendido (con IVA)</div><div class="v num" style="font-size:17px">${eur0(b.ventas)}</div><div class="s">cliente desde ${b.primera != null ? yearOf(b.primera) : "—"}</div></div>
       <div class="kpi" style="grid-column:1/-1"><div class="l">Comisión total</div><div class="v num" style="font-size:17px">${eur0(b.com)}</div><div class="s">cobrado ${eur0(b.cobrado)}</div></div>
     </div>
-    ${prox.length ? `<div class="card"><h2>Recibos por vencer</h2>${prox.map(k => `<div class="ln"><span>${fdate(m.d[k])}</span><b class="num">${eur(m.cob[k])}</b></div>`).join("")}</div>` : ""}
+    ${prox.length ? `<div class="card"><h2>Recibos por vencer</h2>${prox.map(k => `<div class="ln"><span>${fdate(m.d[k])}${facDe(k) ? ` · <small style="color:var(--m2);font-weight:600">${esc(facDe(k))}</small>` : ""}</span><b class="num">${eur(m.cob[k])}</b></div>`).join("")}</div>` : ""}
     <div class="card"><h2>Compras por año</h2>${barras([serie], D.anios.map(a => String(a).slice(2)), ["var(--ventas)"], 110)}</div>
     <div class="seg">${[["entregas", "Entregas"], ["productos", "Referencias"], ["cobros", "Cobros"]].map(([k, l]) => `<button class="${F.seg === k ? "on" : ""}" data-fs="${k}">${l}</button>`).join("")}</div>
     <div class="chips"><button class="chip ${F.anio === "todos" ? "on" : ""}" data-fa="todos">Todos</button>${anios.map(a => `<button class="chip ${String(a) === String(F.anio) ? "on" : ""}" data-fa="${a}">${a}</button>`).join("")}</div>
