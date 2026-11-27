@@ -837,6 +837,25 @@ function abrirFicha(i, seg) {
   $("#ficha").classList.add("on");
 }
 function cerrarFicha() { $("#ficha").classList.remove("on"); }
+function tablaAnios(b) {   // facturación del cliente/barco por año: con IVA, sin IVA, nº de facturas y variación
+  const m = D.mov, A = new Map();
+  for (const k of b.filas) if (m.t[k] === 0 || m.t[k] === 3) {
+    const y = yearOf(m.d[k]); let x = A.get(y); if (!x) A.set(y, x = { tot: 0, base: 0, f: new Set() });
+    x.tot += m.tot[k]; x.base += m.base[k]; x.f.add((D.facturas[m.f[k]] || "s/n") + "|" + m.d[k]);
+  }
+  const ys = [...A.keys()].sort((p, q) => q - p);
+  if (!ys.length) return "";
+  const tot = ys.reduce((s, y) => s + A.get(y).tot, 0), base = ys.reduce((s, y) => s + A.get(y).base, 0), nf = ys.reduce((s, y) => s + A.get(y).f.size, 0);
+  const hoyA = dDate(TODAY).getUTCFullYear();
+  const var_ = y => { const a = A.get(y - 1); if (!a || Math.abs(a.tot) < 1 || y === hoyA) return ""; const p = (A.get(y).tot - a.tot) / Math.abs(a.tot) * 100;
+    return `<span style="color:${p >= 0 ? "var(--verde)" : "var(--rojo)"}">${p >= 0 ? "+" : ""}${NF0.format(p)}%</span>`; };
+  const td = "padding:7px 4px;border-top:1px solid var(--line)", th = "padding:4px;font-weight:600;color:var(--sub);font-size:12px";
+  return `<table style="width:100%;border-collapse:collapse;margin-top:12px;font-size:14px">
+    <tr><th style="${th};text-align:left">Año</th><th style="${th};text-align:right">Con IVA</th><th style="${th};text-align:right">Sin IVA</th><th style="${th};text-align:right">Fact.</th><th style="${th};text-align:right">vs año ant.</th></tr>
+    ${ys.map(y => { const x = A.get(y); return `<tr data-fa="${y}" style="cursor:pointer${String(F.anio) === String(y) ? ";background:var(--chip)" : ""}"><td style="${td};font-weight:600">${y}${y === hoyA ? ' <small style="color:var(--sub);font-weight:500">en curso</small>' : ""}</td><td class="num" style="${td};text-align:right;font-weight:600">${eur(x.tot)}</td><td class="num" style="${td};text-align:right;color:var(--sub)">${eur(x.base)}</td><td class="num" style="${td};text-align:right">${x.f.size}</td><td class="num" style="${td};text-align:right;font-size:13px">${var_(y)}</td></tr>`; }).join("")}
+    <tr><td style="${td};font-weight:700">Total</td><td class="num" style="${td};text-align:right;font-weight:700">${eur(tot)}</td><td class="num" style="${td};text-align:right;color:var(--sub)">${eur(base)}</td><td class="num" style="${td};text-align:right">${nf}</td><td style="${td}"></td></tr>
+  </table><div class="nota" style="margin-top:8px">Toca un año para ver sus entregas, referencias y cobros.</div>`;
+}
 function pintarFicha() {
   const b = F.b, m = D.mov;
   const anios = [...new Set(b.filas.map(k => yearOf(m.d[k])))].sort((x, y) => y - x);
@@ -897,7 +916,7 @@ function pintarFicha() {
       <div class="kpi" style="grid-column:1/-1"><div class="l">Comisión total</div><div class="v num" style="font-size:17px">${eur0(b.com)}</div><div class="s">cobrado ${eur0(b.cobrado)}</div></div>
     </div>
     ${prox.length ? `<div class="card"><h2>Recibos por vencer</h2>${prox.map(k => `<div class="ln"><span>${fdate(m.d[k])}${facDe(k) ? ` · <small style="color:var(--m2);font-weight:600">${esc(facDe(k))}</small>` : ""}</span><b class="num">${eur(m.cob[k])}</b></div>`).join("")}</div>` : ""}
-    <div class="card"><h2>Compras por año</h2>${barras([serie], D.anios.map(a => String(a).slice(2)), ["var(--ventas)"], 110)}</div>
+    <div class="card"><h2>Facturación por año</h2>${barras([serie], D.anios.map(a => String(a).slice(2)), ["var(--ventas)"], 110)}${tablaAnios(b)}</div>
     <div class="seg">${[["entregas", "Entregas"], ["productos", "Referencias"], ["cobros", "Cobros"]].map(([k, l]) => `<button class="${F.seg === k ? "on" : ""}" data-fs="${k}">${l}</button>`).join("")}</div>
     <div class="chips"><button class="chip ${F.anio === "todos" ? "on" : ""}" data-fa="todos">Todos</button>${anios.map(a => `<button class="chip ${String(a) === String(F.anio) ? "on" : ""}" data-fa="${a}">${a}</button>`).join("")}</div>
     ${cuerpo}
@@ -920,7 +939,7 @@ function abrirProducto(c) {
 
 // ======================================================== eventos
 document.addEventListener("click", e => {
-  const t = e.target.closest("button,a"); if (!t) return;
+  const t = e.target.closest("button,a,tr[data-fa]"); if (!t) return;
   const ds = t.dataset;
   if (t.id === "fback") { history.back(); return; }
   if (ds.b != null) { abrirFicha(+ds.b); return; }
